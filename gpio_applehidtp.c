@@ -17,20 +17,20 @@ module_param(isRising, bool, S_IRUGO);      ///< Param desc. S_IRUGO can be read
 MODULE_PARM_DESC(isRising, " Rising edge = 1 (default), Falling edge = 0");  ///< parameter description
 
 static unsigned int gpioTrackpadCS_L = 87;
-module_param(gpioTrackpad, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioTrackpad, " GPIO Trackpad CS_L number (default=87)");  ///< parameter description
+module_param(gpioTrackpadCS_L, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioTrackpadCS_L, " GPIO Trackpad CS_L number (default=87)");  ///< parameter description
 
 static unsigned int gpioTrackpadCLK = 88;
-module_param(gpioTrackpad, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioTrackpad, " GPIO Trackpad CLK number (default=88)");  ///< parameter description
+module_param(gpioTrackpadCLK, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioTrackpadCLK, " GPIO Trackpad CLK number (default=88)");  ///< parameter description
 
 static unsigned int gpioTrackpadMISO = 89;
-module_param(gpioTrackpad, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioTrackpad, " GPIO Trackpad MISO number (default=89)");  ///< parameter description
+module_param(gpioTrackpadMISO, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioTrackpadMISO, " GPIO Trackpad MISO number (default=89)");  ///< parameter description
 
 static unsigned int gpioTrackpadMOSI = 90;
-module_param(gpioTrackpad, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioTrackpad, " GPIO Trackpad MOSI number (default=90)");  ///< parameter description
+module_param(gpioTrackpadMOSI, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioTrackpadMOSI, " GPIO Trackpad MOSI number (default=90)");  ///< parameter description
 
 static char   gpioName[8] = "gpioXXX";      ///< Null terminated default string -- just in case
 static int    irqNumber;                    ///< Used to share the IRQ number within this file

@@ -4,7 +4,9 @@
 #include <linux/gpio.h>       // Required for the GPIO functions
 #include <linux/interrupt.h>  // Required for the IRQ code
 #include <linux/kobject.h>    // Using kobjects for the sysfs bindings
-#include <linux/time.h>       // Using the clock to measure time between button presses
+#include <linux/spi/spi.h>
+#include <linux/spi/spi_bitbang.h>
+#include <linux/spi/spi_gpio.h>
 #define  DEBOUNCE_TIME 200    ///< The default bounce time -- 200ms
 
 MODULE_LICENSE("GPL");
@@ -12,25 +14,32 @@ MODULE_AUTHOR("Joel Krähemann");
 MODULE_DESCRIPTION("Apple HID Keyboard driver over GPIO");
 MODULE_VERSION("0.1");
 
+#define DRIVER_NAME     "applespi:keyboard"
+#define SPI_MISO_GPIO   85
+#define SPI_MOSI_GPIO   86
+#define SPI_SCK_GPIO    84
+#define SPI_N_CHIPSEL   4
+#include "spi-gpio.c"
+
 static bool isRising = 1;                   ///< Rising edge is the default IRQ property
 module_param(isRising, bool, S_IRUGO);      ///< Param desc. S_IRUGO can be read/not changed
 MODULE_PARM_DESC(isRising, " Rising edge = 1 (default), Falling edge = 0");  ///< parameter description
 
 static unsigned int gpioKeyboardCS_L = 83;
-module_param(gpioKeyboard, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioKeyboard, " GPIO Keyboard CS_L number (default=83)");  ///< parameter description
+module_param(gpioKeyboardCS_L, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioKeyboardCS_L, " GPIO Keyboard CS_L number (default=83)");  ///< parameter description
 
 static unsigned int gpioKeyboardCLK = 84;
-module_param(gpioKeyboard, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioKeyboard, " GPIO Keyboard CLK number (default=84)");  ///< parameter description
+module_param(gpioKeyboardCLK, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioKeyboardCLK, " GPIO Keyboard CLK number (default=84)");  ///< parameter description
 
 static unsigned int gpioKeyboardMISO = 85;
-module_param(gpioKeyboard, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioKeyboard, " GPIO Keyboard MISO number (default=85)");  ///< parameter description
+module_param(gpioKeyboardMISO, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioKeyboardMISO, " GPIO Keyboard MISO number (default=85)");  ///< parameter description
 
 static unsigned int gpioKeyboardMOSI = 86;
-module_param(gpioKeyboard, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
-MODULE_PARM_DESC(gpioKeyboard, " GPIO Keyboard MOSI number (default=86)");  ///< parameter description
+module_param(gpioKeyboardMOSI, uint, S_IRUGO);    ///< Param desc. S_IRUGO can be read/not changed
+MODULE_PARM_DESC(gpioKeyboardMOSI, " GPIO Keyboard MOSI number (default=86)");  ///< parameter description
 
 static char   gpioName[8] = "gpioXXX";      ///< Null terminated default string -- just in case
 static int    irqNumber;                    ///< Used to share the IRQ number within this file
@@ -45,21 +54,23 @@ static struct timespec ts_last, ts_current, ts_diff;  ///< timespecs from linux/
 #define APPLE_HID_KBD_REPORT_LENGTH (8)
 #define APPLE_HID_KBD_DESC_LENGTH (208)
 
+static struct spi_gpio_platform_data pdata = {
+
+};
+
+static struct platform_device pdevice = {
+  .name = "spi_gpio",
+  .id = 0x0,
+  .dev.platform = pdata,
+};
+
 static struct apple_hid_kbd_data {
   struct spi_device *spi;
   acpi_handle handle;
 
   u64 spi_sclk_period;	/* period in ns */
   u64 spi_cs_delay;    	/* cs-to-clk delay in us */
-  
-  struct spi_transfer dl_t;
-  struct spi_transfer rd_t;
-  struct spi_message rd_m;
 
-  struct spi_transfer wd_t;
-  struct spi_transfer wr_t;
-  struct spi_transfer st_t;
-  struct spi_message wr_m;
   
   u8 rx_buffer[APPLE_HID_KBD_REPORT_LENGTH];
   u8 tx_status[APPLE_HID_KBD_DESC_LENGTH];
@@ -223,8 +234,8 @@ static int appleHIDKeyboard_hid_parse(struct hid_device *hid)
 
 static int appleHIDKeyboard_hid_get_report_length(struct hid_report *report)
 {
-        return ((report->size - 1) >> 3) + 1 +
-                report->device->report_enum[report->type].numbered + 2;
+  return ((report->size - 1) >> 3) + 1 +
+    report->device->report_enum[report->type].numbered + 2;
 }
 
 /*
@@ -457,51 +468,6 @@ static int appleHIDKeyboard_enable_spi(struct applespi_data *applehidkbd)
   return 0;
 }
 
-static void appleHIDKeyboard_setup_read_txfrs(struct apple_hid_kbd_data *applehidkbd)
-{
-  struct spi_message *msg = &applehidkbd->rd_m;
-  struct spi_transfer *dl_t = &applehidkbd->dl_t;
-  struct spi_transfer *rd_t = &applehidkbd->rd_t;
-
-  memset(dl_t, 0, sizeof *dl_t);
-  memset(rd_t, 0, sizeof *rd_t);
-
-  dl_t->delay_usecs = applehidkbd->spi_cs_delay;
-
-  rd_t->rx_buf = applehidkbd->rx_buffer;
-  rd_t->len = APPLE_HID_KBD_REPORT_LENGTH;
-
-  spi_message_init(msg);
-  spi_message_add_tail(dl_t, msg);
-  spi_message_add_tail(rd_t, msg);
-}
-
-static void appleHIDKeyboard_setup_write_txfrs(struct apple_hid_kbd_data *applehidkbd)
-{
-  struct spi_message *msg = &applehidkbd->wr_m;
-  struct spi_transfer *dl_t = &applehidkbd->wd_t;
-  struct spi_transfer *wr_t = &applehidkbd->wr_t;
-  struct spi_transfer *st_t = &applehidkbd->st_t;
-
-  memset(dl_t, 0, sizeof *dl_t);
-  memset(wr_t, 0, sizeof *wr_t);
-  memset(st_t, 0, sizeof *st_t);
-
-  dl_t->delay_usecs = applehidkbd->spi_cs_delay;
-
-  wr_t->tx_buf = applehidkbd->hid_data.report_desc;
-  wr_t->len = APPLE_HID_KBD_DESC_LENGTH;
-  wr_t->delay_usecs = SPI_RW_CHG_DLY;
-
-  st_t->rx_buf = applehidkbd->tx_status;
-  st_t->len = APPLE_HID_KBD_DESC_LENGTH;
-
-  spi_message_init(msg);
-  spi_message_add_tail(dl_t, msg);
-  spi_message_add_tail(wr_t, msg);
-  spi_message_add_tail(st_t, msg);
-}
-
 static int appleHIDKeyboard_probe(struct spi_device *spi)
 {
   struct apple_hid_kbd_data *applehidkbd;
@@ -518,10 +484,8 @@ static int appleHIDKeyboard_probe(struct spi_device *spi)
   /* Store the driver data */
   spi_set_drvdata(spi, applehidkbd);
   
-  /* Set up our spi messages */
-  appleHIDKeyboard_setup_read_txfrs(applehidkbd);
-  appleHIDKeyboard_setup_write_txfrs(applehidkbd);
-
+  /* setup SPI GPIO */
+  
   /* Cache ACPI method handles */
   if (ACPI_FAILURE(acpi_get_handle(applehidkbd->handle, "SIEN",
 				   &applehidkbd->sien)) ||
@@ -540,6 +504,7 @@ static int appleHIDKeyboard_probe(struct spi_device *spi)
   if (result)
     return result;
 
+  /* hid */
   hid = hid_allocate_device();
 		
   if (IS_ERR(hid)) {
@@ -575,19 +540,3 @@ static int appleHIDKeyboard_probe(struct spi_device *spi)
   return(0);
 }
 
-static struct spi_driver applehidkbd_driver = {
-	.driver		= {
-		.name			= "applespi",
-		.owner			= THIS_MODULE,
-
-		.acpi_match_table	= ACPI_PTR(applehidkbd_acpi_match),
-		.pm			= &applegpio_pm_ops,
-	},
-	.probe		= appleHIDKeyboard_probe,
-	.remove		= appleHIDKeyboard_remove,
-};
-
-// This next calls are  mandatory -- they identify the initialization function
-// and the cleanup function (as above).
-module_init(appleHIDKeyboard_init);
-module_exit(appleHIDKeyboard_exit);
