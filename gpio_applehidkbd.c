@@ -37,121 +37,296 @@ static int    irqNumber;                    ///< Used to share the IRQ number wi
 static struct timespec ts_last, ts_current, ts_diff;  ///< timespecs from linux/time.h (has nano precision)
 
 /* hid descriptor for apple keyboard */
-tatic struct hidg_func_descriptor apple_kbd_hid_data = {
-  .subclass		= 0, /* No subclass */
-  .protocol		= 1, /* Keyboard */
-  .report_length	= 8,
-  .report_desc_length	= 208,
-  .report_desc		= {
-    0x05,0x01,
-    0x09,0x06,
-    0xa1,0x01,
-    0x85,0x01,
-    0x05,0x07,
-    0x19,0xe0,
-    0x29,0xe7,
-    0x15,0x00,
-    0x25,0x01,
-    0x75,0x01,
-    0x95,0x08,
-    0x81,0x02,
-    0x95,0x01,
-    0x75,0x08,
-    0x81,0x01,
-    0x95,0x05,
-    0x75,0x01,
-    0x05,0x08,
-    0x19,0x01,
-    0x29,0x05,
-    0x91,0x02,
-    0x95,0x01,
-    0x75,0x03,
-    0x91,0x01,
-    0x95,0x06,
-    0x75,0x08,
-    0x15,0x00,
-    0x26,0xff,
-    0x00,0x05,
-    0x07,0x19,
-    0x00,0x29,
-    0xff,0x81,
-    0x00,0x05,
-    0x0c,0x75,
-    0x01,0x95,
-    0x01,0x09,
-    0xb8,0x15,
-    0x00,0x25,
-    0x01,0x81,
-    0x02,0x05,
-    0xff,0x09,
-    0x03,0x75,
-    0x07,0x95,
-    0x01,0x81,
-    0x02,0xc0,
-    0x05,0x0c,
-    0x09,0x01,
-    0xa1,0x01,
-    0x85,0x52,
-    0x15,0x00,
-    0x25,0x01,
-    0x75,0x01,
-    0x95,0x01,
-    0x09,0xcd,
-    0x81,0x02,
-    0x09,0xb3,
-    0x81,0x02,
-    0x09,0xb4,
-    0x81,0x02,
-    0x09,0xb5,
-    0x81,0x02,
-    0x09,0xb6,
-    0x81,0x02,
-    0x81,0x01,
-    0x81,0x01,
-    0x81,0x01,
-    0x85,0x09,
-    0x15,0x00,
-    0x25,0x01,
-    0x75,0x08,
-    0x95,0x01,
-    0x06,0x01,
-    0xff,0x09,
-    0x0b,0xb1,
-    0x02,0x75,
-    0x08,0x95,
-    0x02,0xb1,
-    0x01,0xc0,
-    0x06,0x00,
-    0xff,0x09,
-    0x06,0xa1,
-    0x01,0x06,
-    0x00,0xff,
-    0x09,0x06,
-    0x15,0x00,
-    0x26,0xff,
-    0x00,0x75,
-    0x08,0x95,
-    0x40,0x85,
-    0x3f,0x81,
-    0x22,0xc0,
-    0x06,0x00,
-    0xff,0x09,
-    0x0f,0xa1,
-    0x01,0x06,
-    0x00,0xff,
-    0x09,0x0f,
-    0x15,0x00,
-    0x26,0xff,
-    0x00,0x75,
-    0x08,0x95,
-    0x0f,0x85,
-    0xbf,0x81,
-    0x02,0xc0,    
-  }
+
+#define SPI_VENDOR_ID_APPLE (0x05ac)
+#define SPI_DEVICE_ID_APPLE_INTERNAL_KEYBOARD_2016_ISO (0x0276)
+#define SPI_BCD_VERSION_APPLE (3)
+
+#define APPLE_HID_KBD_REPORT_LENGTH (8)
+#define APPLE_HID_KBD_DESC_LENGTH (208)
+
+static struct apple_hid_kbd_data {
+  struct spi_device *spi;
+  acpi_handle handle;
+
+  u64 spi_sclk_period;	/* period in ns */
+  u64 spi_cs_delay;    	/* cs-to-clk delay in us */
+  
+  struct spi_transfer dl_t;
+  struct spi_transfer rd_t;
+  struct spi_message rd_m;
+
+  struct spi_transfer wd_t;
+  struct spi_transfer wr_t;
+  struct spi_transfer st_t;
+  struct spi_message wr_m;
+  
+  u8 rx_buffer[APPLE_HID_KBD_REPORT_LENGTH];
+  u8 tx_status[APPLE_HID_KBD_DESC_LENGTH];
+
+  acpi_handle sien;
+  acpi_handle sist;
+
+  struct hid_device *hid;
+
+  unsigned short bufsize;
+  unsigned char *inbuf;         /* Input buffer */
+  unsigned char *rawbuf;        /* Raw Input buffer */
+  unsigned char *cmdbuf;        /* Command buffer */
+  unsigned char *argsbuf;       /* Command arguments buffer */
+  
+  static const struct hid_func_descriptor hid_data = {
+    unsigned char subclass = 0; /* No subclass */
+    unsigned char protocol = 1; /* Keyboard */
+    unsigned short report_length = APPLE_HID_KBD_REPORT_LENGTH;
+    unsigned short report_desc_length = APPLE_HID_KBD_DESC_LENGTH;
+    unsigned char report_desc[] = {
+      0x05,0x01,
+      0x09,0x06,
+      0xa1,0x01,
+      0x85,0x01,
+      0x05,0x07,
+      0x19,0xe0,
+      0x29,0xe7,
+      0x15,0x00,
+      0x25,0x01,
+      0x75,0x01,
+      0x95,0x08,
+      0x81,0x02,
+      0x95,0x01,
+      0x75,0x08,
+      0x81,0x01,
+      0x95,0x05,
+      0x75,0x01,
+      0x05,0x08,
+      0x19,0x01,
+      0x29,0x05,
+      0x91,0x02,
+      0x95,0x01,
+      0x75,0x03,
+      0x91,0x01,
+      0x95,0x06,
+      0x75,0x08,
+      0x15,0x00,
+      0x26,0xff,
+      0x00,0x05,
+      0x07,0x19,
+      0x00,0x29,
+      0xff,0x81,
+      0x00,0x05,
+      0x0c,0x75,
+      0x01,0x95,
+      0x01,0x09,
+      0xb8,0x15,
+      0x00,0x25,
+      0x01,0x81,
+      0x02,0x05,
+      0xff,0x09,
+      0x03,0x75,
+      0x07,0x95,
+      0x01,0x81,
+      0x02,0xc0,
+      0x05,0x0c,
+      0x09,0x01,
+      0xa1,0x01,
+      0x85,0x52,
+      0x15,0x00,
+      0x25,0x01,
+      0x75,0x01,
+      0x95,0x01,
+      0x09,0xcd,
+      0x81,0x02,
+      0x09,0xb3,
+      0x81,0x02,
+      0x09,0xb4,
+      0x81,0x02,
+      0x09,0xb5,
+      0x81,0x02,
+      0x09,0xb6,
+      0x81,0x02,
+      0x81,0x01,
+      0x81,0x01,
+      0x81,0x01,
+      0x85,0x09,
+      0x15,0x00,
+      0x25,0x01,
+      0x75,0x08,
+      0x95,0x01,
+      0x06,0x01,
+      0xff,0x09,
+      0x0b,0xb1,
+      0x02,0x75,
+      0x08,0x95,
+      0x02,0xb1,
+      0x01,0xc0,
+      0x06,0x00,
+      0xff,0x09,
+      0x06,0xa1,
+      0x01,0x06,
+      0x00,0xff,
+      0x09,0x06,
+      0x15,0x00,
+      0x26,0xff,
+      0x00,0x75,
+      0x08,0x95,
+      0x40,0x85,
+      0x3f,0x81,
+      0x22,0xc0,
+      0x06,0x00,
+      0xff,0x09,
+      0x0f,0xa1,
+      0x01,0x06,
+      0x00,0xff,
+      0x09,0x0f,
+      0x15,0x00,
+      0x26,0xff,
+      0x00,0x75,
+      0x08,0x95,
+      0x0f,0x85,
+      0xbf,0x81,
+      0x02,0xc0,    
+    }
+  };
 };
 
+static int appleHIDKeyboard_hid_parse(struct hid_device *hid)
+{
+  struct spi_device *spi = hid->driver_data;
+  struct apple_hid_kbd_data *applehidkbd = spi_get_drvdata(spi);
+  unsigned int rsize;
+  char *rdesc;
+  int ret;
+
+  rsize = le16_to_cpu(applehidkbd->hid_data.report_desc_length);
+  if (!rsize || rsize > HID_MAX_DESCRIPTOR_SIZE) {
+    dbg_hid("weird size of report descriptor (%u)\n", rsize);
+    return -EINVAL;
+  }
+
+  rdesc = kzalloc(rsize, GFP_KERNEL);
+  if (!rdesc) {
+    dbg_hid("couldn't allocate rdesc memory\n");
+    return -ENOMEM;
+  }
+
+  memcpy(rdesc, applehidkbd->hid_data.report_desc, rsize);
+
+  ret = hid_parse_report(hid, rdesc, rsize);
+  kfree(rdesc);
+  if (ret) {
+    dbg_hid("parsing report descriptor failed\n");
+    return ret;
+  }
+
+  return 0;
+}
+
+static int appleHIDKeyboard_hid_get_report_length(struct hid_report *report)
+{
+        return ((report->size - 1) >> 3) + 1 +
+                report->device->report_enum[report->type].numbered + 2;
+}
+
+/*
+ * Traverse the supplied list of reports and find the longest
+ */
+static void appleHIDKeyboard_hid_find_max_report(struct hid_device *hid, unsigned int type,
+				    unsigned int *max)
+{
+  struct hid_report *report;
+  unsigned int size;
+
+  /* We should not rely on wMaxInputLength, as some devices may set it to
+   * a wrong length. */
+  list_for_each_entry(report, &hid->report_enum[type].report_list, list) {
+    size = appleHIDKeyboard_hid_get_report_length(report);
+    if (*max < size)
+      *max = size;
+  }
+}
+
+static void appleHIDKeyboard_hid_free_buffers(struct apple_hid_kbd_data *applehidkbd)
+{
+  kfree(applehidkbd->inbuf);
+  kfree(applehidkbd->rawbuf);
+  kfree(applehidkbd->argsbuf);
+  kfree(applehidkbd->cmdbuf);
+  applehidkbd->inbuf = NULL;
+  applehidkbd->rawbuf = NULL;
+  applehidkbd->cmdbuf = NULL;
+  applehidkbd->argsbuf = NULL;
+  applehidkbd->bufsize = 0;
+}
+
+static int appleHIDKeyboard_hid_alloc_buffers(struct apple_hid_kbd_data *applehidkbd, size_t report_size)
+{
+  /* the worst case is computed from the set_report command with a
+   * reportID > 15 and the maximum report length */
+  int args_len = sizeof(__u8) + /* ReportID */
+    sizeof(__u8) + /* optional ReportID byte */
+    sizeof(__u16) + /* data register */
+    sizeof(__u16) + /* size of the report */
+    report_size; /* report */
+
+  applehidkbd->inbuf = kzalloc(report_size, GFP_KERNEL);
+  applehidkbd->rawbuf = kzalloc(report_size, GFP_KERNEL);
+  applehidkbd->argsbuf = kzalloc(args_len, GFP_KERNEL);
+  applehidkbd->cmdbuf = kzalloc(sizeof(union command) + args_len, GFP_KERNEL);
+
+  if (!applehidkbd->inbuf || !applehidkbd->rawbuf || !applehidkbd->argsbuf || !applehidkbd->cmdbuf) {
+    i2c_hid_free_buffers(applehidkbd);
+    return -ENOMEM;
+  }
+
+  applehidkbd->bufsize = report_size;
+
+  return 0;
+}
+
+static int appleHIDKeyboard_hid_start(struct hid_device *hid)
+{
+  struct spi_device *spi = hid->driver_data;
+  struct apple_hid_kbd_data *applehidkbd = spi_get_drvdata(spi);
+  int ret;
+  unsigned int bufsize = HID_MIN_BUFFER_SIZE;
+
+  appleHIDKeyboard_hid_find_max_report(hid, HID_INPUT_REPORT, &bufsize);
+  appleHIDKeyboard_hid_find_max_report(hid, HID_OUTPUT_REPORT, &bufsize);
+  appleHIDKeyboard_hid_find_max_report(hid, HID_FEATURE_REPORT, &bufsize);
+
+  if (bufsize > applehidkbd->bufsize) {
+    disable_irq(spi->irq);
+    appleHIDKeyboard_hid_free_buffers(applehidkbd);
+
+    ret = appleHIDKeyboard_hid_alloc_buffers(ihid, bufsize);
+    enable_irq(client->irq);
+
+    if (ret)
+      return ret;
+  }
+
+  return 0;
+}
+
+static void appleHIDKeyboard_hid_stop(struct hid_device *hid)
+{
+  hid->claimed = 0;
+}
+
+struct hid_ll_driver apple_hid_kbd_ll_driver = {
+  .parse = appleHIDKeyboard_hid_parse,
+  .start = appleHIDKeyboard_hid_start,
+  .stop = appleHIDKeyboard_hid_stop,
+  .open = appleHIDKeyboard_hid_open,
+  .close = appleHIDKeyboard_hid_close,
+  .power = appleHIDKeyboard_hid_power,
+  .output_report = appleHIDKeyboard_hid_output_report,
+  .raw_request = appleHIDKeyboard_hid_raw_request,
+};
+EXPORT_SYMBOL_GPL(apple_hid_kbd_ll_driver);
+
 /// Function prototype for the custom IRQ handler function -- see below for the implementation
-static irq_handler_t  applegpio_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs);
+static irq_handler_t appleHIDKeyboard_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs);
 
 static struct kobject *apple_kobj;
 
@@ -239,7 +414,7 @@ static void __exit appleHIDKeyboard_exit(void){
  *  @param regs   h/w specific register values -- only really ever used for debugging.
  *  return returns IRQ_HANDLED if successful -- should return IRQ_NONE otherwise.
  */
-static irq_handler_t applegpio_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs){
+static irq_handler_t appleHIDKeyboard_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs){
   //TODO:JK: MOSI
   
   getnstimeofday(&ts_current);         // Get the current time as ts_current
@@ -248,6 +423,169 @@ static irq_handler_t applegpio_irq_handler(unsigned int irq, void *dev_id, struc
   
   return (irq_handler_t) IRQ_HANDLED;  // Announce that the IRQ has been handled correctly
 }
+
+static int appleHIDKeyboard_setup_spi(struct applespi_data *applehidkbd)
+{
+  return 0;
+}
+
+static int appleHIDKeyboard_enable_spi(struct applespi_data *applehidkbd)
+{
+  int result;
+  long long unsigned int spi_status;
+
+  /* Check if SPI is already enabled, so we can skip the delay below */
+  result = acpi_evaluate_integer(applehidkbd->sist, NULL, NULL, &spi_status);
+  if (ACPI_SUCCESS(result) && spi_status)
+    return 0;
+
+  /* SIEN(1) will enable SPI communication */
+  result = acpi_execute_simple_method(applehidkbd->sien, NULL, 1);
+  if (ACPI_FAILURE(result)) {
+    pr_err("SIEN failed: %s\n", acpi_format_exception(result));
+    return -ENODEV;
+  }
+
+  /*
+   * Allow the SPI interface to come up before returning. Without this
+   * delay, the SPI commands to enable multitouch mode may not reach
+   * the trackpad controller, causing pointer movement to break upon
+   * resume from sleep.
+   */
+  msleep(50);
+
+  return 0;
+}
+
+static void appleHIDKeyboard_setup_read_txfrs(struct apple_hid_kbd_data *applehidkbd)
+{
+  struct spi_message *msg = &applehidkbd->rd_m;
+  struct spi_transfer *dl_t = &applehidkbd->dl_t;
+  struct spi_transfer *rd_t = &applehidkbd->rd_t;
+
+  memset(dl_t, 0, sizeof *dl_t);
+  memset(rd_t, 0, sizeof *rd_t);
+
+  dl_t->delay_usecs = applehidkbd->spi_cs_delay;
+
+  rd_t->rx_buf = applehidkbd->rx_buffer;
+  rd_t->len = APPLE_HID_KBD_REPORT_LENGTH;
+
+  spi_message_init(msg);
+  spi_message_add_tail(dl_t, msg);
+  spi_message_add_tail(rd_t, msg);
+}
+
+static void appleHIDKeyboard_setup_write_txfrs(struct apple_hid_kbd_data *applehidkbd)
+{
+  struct spi_message *msg = &applehidkbd->wr_m;
+  struct spi_transfer *dl_t = &applehidkbd->wd_t;
+  struct spi_transfer *wr_t = &applehidkbd->wr_t;
+  struct spi_transfer *st_t = &applehidkbd->st_t;
+
+  memset(dl_t, 0, sizeof *dl_t);
+  memset(wr_t, 0, sizeof *wr_t);
+  memset(st_t, 0, sizeof *st_t);
+
+  dl_t->delay_usecs = applehidkbd->spi_cs_delay;
+
+  wr_t->tx_buf = applehidkbd->hid_data.report_desc;
+  wr_t->len = APPLE_HID_KBD_DESC_LENGTH;
+  wr_t->delay_usecs = SPI_RW_CHG_DLY;
+
+  st_t->rx_buf = applehidkbd->tx_status;
+  st_t->len = APPLE_HID_KBD_DESC_LENGTH;
+
+  spi_message_init(msg);
+  spi_message_add_tail(dl_t, msg);
+  spi_message_add_tail(wr_t, msg);
+  spi_message_add_tail(st_t, msg);
+}
+
+static int appleHIDKeyboard_probe(struct spi_device *spi)
+{
+  struct apple_hid_kbd_data *applehidkbd;
+  struct hid_device *hid;
+  
+  /* Allocate driver data */
+  applehidkbd = devm_kzalloc(&spi->dev, sizeof(*applehidkbd), GFP_KERNEL);
+  if (!applehidkbd)
+    return -ENOMEM;
+
+  applehidkbd->spi = spi;
+  applehidkbd->handle = ACPI_HANDLE(&spi->dev);
+  
+  /* Store the driver data */
+  spi_set_drvdata(spi, applehidkbd);
+  
+  /* Set up our spi messages */
+  appleHIDKeyboard_setup_read_txfrs(applehidkbd);
+  appleHIDKeyboard_setup_write_txfrs(applehidkbd);
+
+  /* Cache ACPI method handles */
+  if (ACPI_FAILURE(acpi_get_handle(applehidkbd->handle, "SIEN",
+				   &applehidkbd->sien)) ||
+      ACPI_FAILURE(acpi_get_handle(applehidkbd->handle, "SIST",
+				   &applehidkbd->sist))) {
+    pr_err("Failed to get required ACPI method handle\n");
+    return -ENODEV;
+  }
+
+  /* Switch on the SPI interface */
+  result = appleHIDKeyboard_setup_spi(applehidkbd);
+  if (result)
+    return result;
+
+  result = appleHIDKeyboard_enable_spi(applehidkbd);
+  if (result)
+    return result;
+
+  hid = hid_allocate_device();
+		
+  if (IS_ERR(hid)) {
+    result = PTR_ERR(hid);
+    
+    return result;
+  }
+
+  applehidkbd->hid = hid
+  hid->driver_data = spi;
+
+  hid->ll_driver = &spi_hid_ll_driver;
+  hid->dev.parent = &spi->dev;
+  hid->bus = BUS_SPI;
+
+  hid->version = le16_to_cpu(SPI_BCD_VERSION_APPLE);
+  hid->vendor = le16_to_cpu(SPI_VENDOR_ID_APPLE);
+  hid->product = le16_to_cpu(SPI_DEVICE_ID_APPLE_INTERNAL_KEYBOARD_2016_ISO);
+
+  snprintf(hid->name, sizeof(hid->name), "%s %04hX:%04hX",
+	   spi->modalias, hid->vendor, hid->product);
+  strlcpy(hid->phys, dev_name(&spi->dev), sizeof(hid->phys));
+
+  ret = hid_add_device(hid);
+  if (ret) {
+    if (ret != -ENODEV)
+      hid_err(spi, "can't add hid device: %d\n", ret);
+    goto err_mem_free;
+  }
+
+  dev_info(&spi->dev, "registered HID keyboard driver\n");
+  
+  return(0);
+}
+
+static struct spi_driver applehidkbd_driver = {
+	.driver		= {
+		.name			= "applespi",
+		.owner			= THIS_MODULE,
+
+		.acpi_match_table	= ACPI_PTR(applehidkbd_acpi_match),
+		.pm			= &applegpio_pm_ops,
+	},
+	.probe		= appleHIDKeyboard_probe,
+	.remove		= appleHIDKeyboard_remove,
+};
 
 // This next calls are  mandatory -- they identify the initialization function
 // and the cleanup function (as above).
